@@ -1,41 +1,57 @@
 pipeline {
     agent any
+
     stages {
+
         stage('Build Backend Image') {
             steps {
                 sh '''
-                docker rmi -f backend-app || true
+                docker rmi -f backend-app 2>/dev/null || true
                 docker build -t backend-app backend
                 '''
             }
         }
+
         stage('Deploy Backend Containers') {
             steps {
                 sh '''
-                docker network create app-network || true
-                docker rm -f backend1 backend2 || true
+                # Ensure network exists
+                docker network inspect app-network >/dev/null 2>&1 || \
+                docker network create app-network
+
+                # Stop & remove old containers safely
+                docker stop backend1 backend2 2>/dev/null || true
+                docker rm -f backend1 backend2 2>/dev/null || true
+
+                # Small wait to release container names
+                sleep 2
+
+                # Start fresh backend containers
                 docker run -d --name backend1 --network app-network backend-app
                 docker run -d --name backend2 --network app-network backend-app
                 '''
             }
         }
+
         stage('Deploy NGINX Load Balancer') {
             steps {
                 sh '''
-                docker rm -f nginx-lb || true
-                
+                docker stop nginx-lb 2>/dev/null || true
+                docker rm -f nginx-lb 2>/dev/null || true
+
                 docker run -d \
                   --name nginx-lb \
                   --network app-network \
                   -p 80:80 \
                   nginx
-                
+
                 docker cp nginx/default.conf nginx-lb:/etc/nginx/conf.d/default.conf
                 docker exec nginx-lb nginx -s reload
                 '''
             }
         }
     }
+
     post {
         success {
             echo 'Pipeline executed successfully. NGINX load balancer is running.'
